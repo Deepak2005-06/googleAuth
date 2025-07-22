@@ -61,32 +61,35 @@ function App() {
   const [modalOpen, setModalOpen] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [orderId, setOrderId] = useState(null);
   const [isSignup, setIsSignup] = useState(false);
   const [theme, setTheme] = useState(localStorage.getItem("theme") || "dark");
   const [animCartItem, setAnimCartItem] = useState(null);
+  const [email, setEmail] = useState(localStorage.getItem("email") || "");
 
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const name = params.get("userName");
-    const picture = params.get("picture");
-    const gid = params.get("googleId");
+useEffect(() => {
+  const params = new URLSearchParams(window.location.search);
+  const name = params.get("userName");
+  const picture = params.get("picture");
+  const gid = params.get("googleId");
+  const mail = params.get("email"); // ✅ Get email from URL
 
-    if (name && gid) {
-      setUserName(name);
-      setUserPicture(picture || "");
-      setGoogleId(gid);
+  if (name && gid) {
+    setUserName(name);
+    setUserPicture(picture || "");
+    setGoogleId(gid);
+    setEmail(mail || "");
 
-      localStorage.setItem("userName", name);
-      localStorage.setItem("userPicture", picture || "");
-      localStorage.setItem("googleId", gid);
+    localStorage.setItem("userName", name);
+    localStorage.setItem("userPicture", picture || "");
+    localStorage.setItem("googleId", gid);
+    localStorage.setItem("email", mail || "");
 
-      window.history.replaceState({}, document.title, window.location.pathname);
-      showToast("Welcome " + name, "success");
-    }
-  }, []);
+    window.history.replaceState({}, document.title, window.location.pathname);
+    showToast("Welcome " + name, "success");
+  }
+}, []);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-bs-theme", theme);
@@ -127,7 +130,7 @@ function App() {
     setToast({ show: true, message, variant });
     setTimeout(() => setToast({ show: false }), duration);
   };
-
+    
   const handleLogin = (e) => {
     e.preventDefault();
     setUserName(username || "Guest");
@@ -166,19 +169,32 @@ function App() {
 
   const filteredMenu = MENU.filter((item) => filter === "All" || item.category === filter);
 
-  const placeOrder = () => {
-    const orderItems = items.map((item) => ({
-      ...item,
-      quantity: quantities[item.id] || 1,
-    }));
-    const subtotal = orderItems.reduce((sum, item) => sum + item.price * (quantities[item.id] || 1), 0);
-    const tax = subtotal * 0.05;
-    const total = subtotal + tax;
-    setOrderId("ORD-" + Date.now());
-    setBill(true);
-    setModalOpen(false);
-    showToast("Order placed, OTP sent!", "success");
-  };
+  const placeOrder = async () => {
+  const orderItems = items.map((item) => ({
+    ...item,
+    quantity: quantities[item.id] || 1,
+  }));
+  const subtotal = orderItems.reduce((sum, item) => sum + item.price * (quantities[item.id] || 1), 0);
+  const tax = subtotal * 0.05;
+  const total = subtotal + tax;
+
+  try {
+    const res = await fetch("http://localhost:5000/order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ googleId, localId: null, email, items: orderItems, total }), // ✅ Pass email
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    setOrderId(data.orderId);
+    setBill(true);
+    setModalOpen(false);
+    showToast("Order placed, OTP sent!", "success");
+  } catch (err) {
+    showToast("Order failed", "danger");
+  }
+};
+
 
   const confirmOrder = () => {
     setOrderHistory((prev) => [
@@ -325,7 +341,7 @@ function App() {
       </button>
     </div>
   );
-
+    
   function OtpInput({ otp, setOtp }) {
     return (
       <div className="otp-digit-group">
@@ -356,6 +372,7 @@ function App() {
 
   return (
     <div className={`app ${theme}`}>
+      
       {toast.show && (
         <div className="position-fixed bottom-0 end-0 p-3" style={{ zIndex: 9999 }}>
           <div className={`toast show text-bg-${toast.variant} border-0`}>

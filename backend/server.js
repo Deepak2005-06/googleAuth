@@ -7,9 +7,8 @@ const { OAuth2Client } = require('google-auth-library');
 const path = require('path');
 const fs = require('fs');
 const querystring = require('querystring');
-const generatePDF = require('./utils/generatePDF.js');
 const User = require('./models/User');
-const Order = require('./models/Order.js');
+const Order = require('./models/Order');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -20,6 +19,15 @@ const client = new OAuth2Client(
   process.env.GOOGLE_CLIENT_SECRET,
   process.env.GOOGLE_REDIRECT_URI
 );
+
+// Configure Nodemailer transporter
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
 
 app.use(express.json());
 app.use(cors({ origin: 'http://localhost:5173', credentials: true }));
@@ -36,7 +44,6 @@ app.get('/auth/google', (req, res) => {
   });
   res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${qs}`);
 });
-
 
 app.get('/auth/google/callback', async (req, res) => {
   const { code } = req.query;
@@ -55,8 +62,7 @@ app.get('/auth/google/callback', async (req, res) => {
     if (!user) {
       user = await User.create({ googleId, name, email, picture });
     }
-    res.redirect(`http://localhost:5173?userName=${encodeURIComponent(name)}&picture=${encodeURIComponent(picture)}&googleId=${googleId}`);
-
+    res.redirect(`http://localhost:5173?userName=${encodeURIComponent(name)}&picture=${encodeURIComponent(picture)}&googleId=${googleId}&email=${encodeURIComponent(email)}`);
   } catch (err) {
     console.error('OAuth Error:', err);
     res.status(500).json({ error: 'OAuth failed', details: err.message });
@@ -70,9 +76,7 @@ app.post('/auth/local/signup', async (req, res) => {
 
   try {
     let user = await User.findOne({ localId });
-    if (user) {
-      return res.status(400).json({ error: 'User already exists' });
-    }
+    if (user) return res.status(400).json({ error: 'User already exists' });
 
     user = await User.create({
       localId,
@@ -95,10 +99,7 @@ app.post('/auth/local/login', async (req, res) => {
 
   try {
     const user = await User.findOne({ localId });
-
-    if (!user || user.password !== password) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
+    if (!user || user.password !== password) return res.status(401).json({ error: 'Invalid credentials' });
 
     res.json({ user });
   } catch (err) {
@@ -108,43 +109,38 @@ app.post('/auth/local/login', async (req, res) => {
 
 // === ORDER ENDPOINT + OTP EMAIL ===
 app.post('/order', async (req, res) => {
-  const { googleId, localId, items, total } = req.body;
+  const { googleId, localId, email, items, total } = req.body;
 
-  if ((!googleId && !localId) || !items?.length || !total) {
-    return res.status(400).json({ error: 'Missing data' });
+  if ((!googleId && !localId) || !items?.length || !total || !email) {
+    return res.status(400).json({ error: 'Missing required data' });
   }
 
   try {
     const user = await User.findOne(googleId ? { googleId } : { localId });
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    // Generate OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const otpExpires = Date.now() + 10 * 60 * 1000; // 10 min
+    // Generate OTP and expiration
+    const otp = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit OTP
+    const otpExpires = Date.now() + 10 * 60 * 1000; // 10 minutes expiration
 
     const order = await Order.create({
       googleId: user.googleId || null,
+      localId: user.localId || null,
       items,
       total,
       otp,
       otpExpires,
-      status: 'pending'
+      status: 'pending',
     });
 
-    const pdfPath = await generatePDF(order, user);
+    // Mock PDF generation (replace with actual generatePDF function)
+    const pdfPath = path.join(__dirname, `receipt-${order._id}.pdf`);
+    fs.writeFileSync(pdfPath, 'Mock PDF content'); // Placeholder for PDF
 
-    // Send email
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-    });
-
+    // Send email with OTP
     await transporter.sendMail({
       from: `"MenuApp 🍽️" <${process.env.EMAIL_USER}>`,
-      to: user.email,
+      to: email,
       subject: '🔐 Your MenuApp OTP & Receipt',
       html: `
         <h3>Hi ${user.name},</h3>
@@ -162,6 +158,7 @@ app.post('/order', async (req, res) => {
       ],
     });
 
+    // Clean up PDF file
     fs.unlinkSync(pdfPath);
 
     res.json({ message: 'Order placed. OTP emailed.', orderId: order._id });
@@ -170,7 +167,6 @@ app.post('/order', async (req, res) => {
     res.status(500).json({ error: 'Failed to place order', details: err.message });
   }
 });
-
 
 // === ORDER CONFIRMATION ===
 app.post('/order/confirm', async (req, res) => {
@@ -196,30 +192,23 @@ app.post('/order/confirm', async (req, res) => {
   }
 });
 
+// === TEST EMAIL ENDPOINT ===
 app.get('/test-email', (req, res) => {
-  const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
-    },
-  });
   transporter.sendMail({
     from: `"Test" <${process.env.EMAIL_USER}>`,
     to: process.env.EMAIL_USER,
     subject: 'Test Email',
-    text: 'This is a test email.',
+    text: 'This is a test email sent at ' + new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
   }, (err, info) => {
     if (err) {
       console.error('Test Email Error:', err);
-      res.status(500).json({ error: err.message });
-    } else {
-      console.log('Test Email sent:', info.response);
-      res.json({ message: 'Test email sent', info });
+      return res.status(500).json({ error: err.message });
     }
+    console.log('✅ Test Email Sent:', info.response);
+    res.json({ message: 'Test email sent', info });
   });
 });
- 
+
 // === MongoDB Connection ===
 mongoose
   .connect(process.env.MONGODB_URI, { useNewUrlParser: true, useUnifiedTopology: true })
